@@ -13,9 +13,10 @@ library(glmnet)
 
 library(ROCR)
 
-
+source('helper_functions.R')
 
 d <- read_csv('dataset.csv')
+
 
 
 d %>%
@@ -56,6 +57,15 @@ d2 <- d1 %>%
    cbind.data.frame(d, .) %>%
    mutate(a = sqrt(x^2 + y^2 + z^2)) %T>%
    head()
+
+
+d2 %>%
+   mutate(n = 1:n()) %>%
+   select(n, activity, x:z) %>%
+   gather(direction, acceleration, -n, -activity) %>%
+   ggplot() +
+   geom_point(aes(x = n, y = acceleration, group = direction, color = direction), size=1, alpha=0.1) +
+   facet_grid(direction ~ activity, scales="free_y")
 
 
 # split to train and test
@@ -148,55 +158,6 @@ eval.model(pred_glmnet[trainind], train$activity, pred_glmnet[-trainind], test$a
 eval.model(pred_gbm[trainind], train$activity, pred_gbm[-trainind], test$activity)
 eval.model(pred_rf[trainind], train$activity, pred_rf[-trainind], test$activity)
 eval.model(pred_ensemble[trainind], train$activity, pred_ensemble[-trainind], test$activity)
-
-
-
-
-###########################################################################################################
-################################################ functions ################################################
-###########################################################################################################
-
-#' get.ROC.df
-#'
-#' calculates ROC curve data for plotting
-get.ROC.df <- function(fit, lab, set) {
-   pred <- prediction(fit, lab)
-   perf <- performance(pred, "tpr", "fpr")
-   
-   data.frame(x = perf@x.values[[1]],
-              y = perf@y.values[[1]],
-              xlab = perf@x.name,
-              ylab = perf@y.name, 
-              set = set)
-}
-
-#' get.AUC
-#'
-#' calculates AUC
-get.AUC <- function(fit, lab, set) {
-   pred <- prediction(fit, lab)
-   perf <- performance(pred, "auc")
-   perf@y.values[[1]]
-}
-
-
-
-#' eval.model
-#' 
-#' plots ROC curves for training validation sets
-eval.model <- function(fit.tr, lab.tr, fit.te, lab.te) {
-   auc.train <- get.AUC(fit.tr, lab.tr)
-   auc.test <- get.AUC(fit.te, lab.te)
-   
-   rbind.data.frame(get.ROC.df(fit.tr, lab.tr, sprintf('train auc = %0.5f', auc.train)),
-                    get.ROC.df(fit.te, lab.te, sprintf('test auc = %0.5f', auc.test))) %>%
-      ggplot(data = ., mapping = aes(x = x, y = y, color = set, group = set)) +
-      geom_line() +
-      coord_fixed() + 
-      facet_grid(~set)
-}
-
-
 
 
 
