@@ -115,10 +115,10 @@ fit.tr <- predict(m, model.matrix(fmla, train))
 fit.te <- predict(m, model.matrix(fmla, test))
 
 auc.glmnet.tr <- apply(fit.tr, 2, get.AUC, lab=train$activity)
-plot(m$lambda, auc.glmnet.tr)
+# plot(m$lambda, auc.glmnet.tr)
 
 auc.glmnet.te <- apply(fit.te, 2, get.AUC, lab=test$activity)
-plot(m$lambda, auc.glmnet.te)
+# plot(m$lambda, auc.glmnet.te)
 
 # select the best lambda based on the validation set
 pred_glmnet <- predict(m, model.matrix(fmla, d2), s = m$lambda[which(auc.glmnet.te == max(auc.glmnet.te))], type = 'response')
@@ -156,15 +156,15 @@ J <- function(x) {
    num.trees <- ceiling(x[1])
    min.node.size <- ceiling(x[2])
    
-   set.seed(1)
+   set.seed(612654)
    m <- ranger(fmla, train, num.trees = num.trees, num.threads = 4, verbose = T, min.node.size = min.node.size)
    fit.te <- predict(m, test)$predictions
    
    auc <- get.AUC(fit.te, lab=test$activity)
-   print(c(x, auc))
+   cat(sprintf("N trees: %3d, Min node size: %2d, AUC: %0.7f\n", ceiling(x[1]), ceiling(x[2]), auc))
    -auc
 }
-x <- optim(c(2, 5), J, control = list(parscale=c(2, 1)))
+x <- optim(c(10, 5), J, control = list(parscale=c(10, 1)))
 
 m <- ranger(fmla, train, num.trees = ceiling(x$par[1]), num.threads = 4, verbose = T, min.node.size = ceiling(x$par[2]))
 pred_rf <- predict(m, d2)$predictions
@@ -185,9 +185,53 @@ eval.model(pred_ensemble[trainind], train$activity, pred_ensemble[-trainind], te
 
 
 
-dd <- d[d$block == 5,]
+dd <- d2[d2$block == 5,]
 
-fft(dd$)
+plot_fft <- function(t, x, Fmax=512){
+   # ft <- fft(x)
+   
+   f <- seq(0, Fmax, 1)
+   W <- matrix(0, nrow = length(f), ncol = length(t))
+   for (i in 1:length(f)) W[i,] = exp(-2*pi*j * f[i]*t)
+   
+   ft <- W %*% x
+   plot(f, abs(ft), type = 'l')
+}
+
+
+
+plot_fft(dd$t, dd$acceleration_x, Fmax = 16)
+plot_fft(dd$t, dd$acceleration_y)
+plot_fft(dd$t, dd$acceleration_z)
+
+plot_fft(dd$t, dd$gyro_x)
+plot_fft(dd$t, dd$gyro_y)
+plot_fft(dd$t, dd$gyro_z)
+
+plot_fft(dd$t, dd$x)
+plot_fft(dd$t, dd$y)
+plot_fft(dd$t, dd$z)
+
+
+
+library(signal)
+
+freqz(signal::butter(5, .1, 'low'))
+
+
+
+
+wss <- list()
+
+for (nc in 2:50) {
+   km <- kmeans(t, nc)
+   wss <- c(wss, list(c('nc' = nc, 'wss' = km$tot.withinss)))
+}
+
+
+km <- map_df(wss, bind_rows)
+plot(km$nc, km$wss, type='l')
+
 
 
 
