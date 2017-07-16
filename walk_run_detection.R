@@ -10,14 +10,13 @@ library(ranger)
 library(glmnet)
 
 library(ROCR)
-library(FactoMineR)
-library(factoextra)
+
 
 
 d <- read_csv('dataset.csv')
 
 
-
+# rotation matrices
 Ry <- function(x) {
    matrix(c(cos(x), -sin(x), 0, sin(x), cos(x), 0, 0, 0, 1), nrow = 3, byrow = T)
 }
@@ -31,6 +30,7 @@ Rr <- function(x) {
 }
 
 
+# rotate accelerometer data - roll, pitch, yaw
 d1 <- list()
 for (i in 1:nrow(d)) {
    d1[[i]] <- t(Ry(d$acceleration_x[i])) %*% t(Rp(d$acceleration_x[i])) %*% t(Rr(d$acceleration_x[i])) %*% t(as.matrix(d[i,5:7]))
@@ -38,11 +38,14 @@ for (i in 1:nrow(d)) {
 }
 
 
+# merge rotated accelerometer data
 d2 <- d1 %>%
    map(~t(.x)) %>%
    do.call(rbind, .) %>%
-   cbind.data.frame(d, .) %T>%
+   cbind.data.frame(d, .) %>%
+   mutate(a = sqrt(x^2 + y^2 + z^2)) %T>%
    head()
+
 
 # split to train and test
 trainind <- createDataPartition(d2$activity, p = .8, list = F, times = 1)
@@ -51,32 +54,100 @@ test <- d2[-trainind,]
 
 
 # formula
-fmla <- activity ~ acceleration_x + acceleration_y + acceleration_z + gyro_x + gyro_y + gyro_z + x + y + z
+fmla <- activity ~ acceleration_x + acceleration_y + acceleration_z + gyro_x + gyro_y + gyro_z + x + y + z + a
 
 
-m <- glm(fmla, train, family = binomial())
+# fit logistic regression
+m <- glm(fmla, train, family = binomial(), control = glm.control(maxit = 25, trace = F))
+m <- MASS::stepAIC(m, direction = 'bo', k = 5)
+car::vif(m)
+fit.tr <- m$fitted.values
+fit.te <- predict(m, test)
+eval.model(fit.tr, train$activity, fit.te, test$activity)
+get.AUC(fit.tr, train$activity)
+get.AUC(fit.te, test$activity)
 
 
-m <- glmnet(model.matrix(fmla, d2), d2$activity, family="binomial", lambda = seq(1e-4, 1e-3, length.out = 100), )
-trfit <- predict(m, model.matrix(fmla, train))
-tefit <- predict(m, model.matrix(fmla, test))
+# fit glmnet
+m <- glmnet(model.matrix(fmla, d2), d2$activity, family="binomial", nlambda = 200)
+fit.tr <- predict(m, model.matrix(fmla, train))
+fit.te <- predict(m, model.matrix(fmla, test))
 
-auc <- apply(trfit, 2, get.AUC, lab=train$activity)
-plot(m$lambda, auc)
+auc.glmnet.tr <- apply(fit.tr, 2, get.AUC, lab=train$activity)
+plot(m$lambda, auc.glmnet.tr)
 
-auc <- apply(tefit, 2, get.AUC, lab=test$activity)
-plot(m$lambda, auc)
+auc.glmnet.te <- apply(fit.te, 2, get.AUC, lab=test$activity)
+plot(m$lambda, auc.glmnet.te)
 
-
-m <- gbm(fmla, distribution = 'bernoulli', data = train, n.trees = 100, shrinkage = 0.1, interaction.depth = 5, n.cores = 4, verbose = T)
-trfit <- m$fit
-tefit <- predict(m, test, n.trees = m$n.trees)
-
-m <- ranger(fmla, train, num.trees = 1000, num.threads = 4, verbose = T, min.node.size = 5)
-trfit <- m$predictions
-tefit <- predict(m, test)$predictions
+# select the best lambda based on the validation set
+pred_glmnet <- predict(m, model.matrix(fmla, d2), s = m$lambda[which(auc.glmnet.te == max(auc.glmnet.te))], type = 'response')
+eval.model(pred_glmnet[trainind], train$activity, pred_glmnet[-trainind], test$activity)
 
 
+# fir gradient boost
+m <- gbm(fmla, distribution = 'bernoulli', data = train, n.trees = 50, shrinkage = 0.1, interaction.depth = 5, n.cores = 4, verbose = T)
+fit.te <- predict(m, test, n.trees = m$n.trees)
+auc.gbm.te.0 <- auc.glmnet.te <- get.AUC(fit.te, lab=test$activity)
+
+for (i in 1:9) {
+   m0 <- m
+   m <- gbm.more(m, 50)
+
+   fit.te <- predict(m, test, n.trees = m$n.trees)
+   
+   auc.gbm.te <- get.AUC(fit.te, lab=test$activity)
+   if (auc.gbm.te > auc.gbm.te.0) {
+      m0 <- m
+   }
+}
+m <- m0
+fit.tr <- predict(m, train, n.trees = m$n.trees)
+fit.te <- predict(m, test, n.trees = m$n.trees)
+eval.model(fit.tr, train$activity, fit.te, test$activity)
+pred_gbm <- predict(m, d2, n.trees = m$n.trees, type = 'response')
+
+
+# fit random forest
+# optimize number of trees and min.node.size
+J <- function(x) {
+   if (any(x<0)) return (1e10)
+   
+   num.trees <- ceiling(x[1])
+   min.node.size <- ceiling(x[2])
+   
+   set.seed(1)
+   m <- ranger(fmla, train, num.trees = num.trees, num.threads = 4, verbose = T, min.node.size = min.node.size)
+   fit.te <- predict(m, test)$predictions
+   
+   auc <- get.AUC(fit.te, lab=test$activity)
+   print(c(x, auc))
+   -auc
+}
+x <- optim(c(2, 5), J, control = list(parscale=c(2, 1)))
+
+m <- ranger(fmla, train, num.trees = ceiling(x$par[1]), num.threads = 4, verbose = T, min.node.size = ceiling(x$par[2]))
+pred_rf <- predict(m, d2)$predictions
+eval.model(pred_rf[trainind], train$activity, pred_rf[-trainind], test$activity)
+
+
+pred_ensemble <- rowMeans(cbind(pred_glmnet, pred_gbm, pred_rf))
+
+
+eval.model(pred_glmnet[trainind], train$activity, pred_glmnet[-trainind], test$activity)
+eval.model(pred_gbm[trainind], train$activity, pred_gbm[-trainind], test$activity)
+eval.model(pred_rf[trainind], train$activity, pred_rf[-trainind], test$activity)
+eval.model(pred_ensemble[trainind], train$activity, pred_ensemble[-trainind], test$activity)
+
+
+
+
+###########################################################################################################
+################################################ functions ################################################
+###########################################################################################################
+
+#' get.ROC.df
+#'
+#' calculates ROC curve data for plotting
 get.ROC.df <- function(fit, lab, set) {
    pred <- prediction(fit, lab)
    perf <- performance(pred, "tpr", "fpr")
@@ -88,24 +159,31 @@ get.ROC.df <- function(fit, lab, set) {
               set = set)
 }
 
+#' get.AUC
+#'
+#' calculates AUC
 get.AUC <- function(fit, lab, set) {
    pred <- prediction(fit, lab)
    perf <- performance(pred, "auc")
    perf@y.values[[1]]
 }
 
-rbind.data.frame(get.ROC.df(trfit, train$activity, 'train'),
-                 get.ROC.df(tefit, test$activity, 'test')) %>%
-   ggplot(data = ., mapping = aes(x = x, y = y, color = set, group = set)) +
-   geom_line() + 
-   coord_fixed()
 
 
-
-
-
-
-
+#' eval.model
+#' 
+#' plots ROC curves for training validation sets
+eval.model <- function(fit.tr, lab.tr, fit.te, lab.te) {
+   auc.train <- get.AUC(fit.tr, lab.tr)
+   auc.test <- get.AUC(fit.te, lab.te)
+   
+   rbind.data.frame(get.ROC.df(fit.tr, lab.tr, sprintf('train auc = %0.5f', auc.train)),
+                    get.ROC.df(fit.te, lab.te, sprintf('test auc = %0.5f', auc.test))) %>%
+      ggplot(data = ., mapping = aes(x = x, y = y, color = set, group = set)) +
+      geom_line() +
+      coord_fixed() + 
+      facet_grid(~set)
+}
 
 
 
