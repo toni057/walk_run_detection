@@ -1,8 +1,10 @@
 library(dplyr)
+library(tidyr)
 library(readr)
 library(purrr)
 library(magrittr)
 library(ggplot2)
+library(reshape2)
 
 library(caret)
 library(gbm)
@@ -14,6 +16,15 @@ library(ROCR)
 
 
 d <- read_csv('dataset.csv')
+
+
+d %>%
+   mutate(n = 1:n()) %>%
+   select(n, activity, acceleration_x:acceleration_z) %>%
+   gather(direction, acceleration, -n, -activity) %>%
+   ggplot() +
+   geom_point(aes(x = n, y = acceleration, group = direction, color = direction), size=1, alpha=0.1) +
+   facet_grid(direction ~ activity, scales="free_y")
 
 
 # rotation matrices
