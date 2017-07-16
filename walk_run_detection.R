@@ -31,7 +31,7 @@ d <- d %>%
           t = t - min(t)) %>%
    ungroup(block) %>%
    arrange(block, t) %>%
-   select(date, time, t, username:gyro_z)
+   select(date, time, block, t, username:gyro_z)
 
 
 # scatterplot
@@ -180,20 +180,6 @@ eval.model(pred_ensemble[trainind], train$activity, pred_ensemble[-trainind], te
 
 
 
-
-
-dd <- d2[d$block == 5,]
-dd %>%
-   mutate(time = strsplit(time, ':') %>%
-             map_dbl( function(x) {
-                x <- as.numeric(x)
-                x[1:3] %*% c(60*60, 60, 1) + x[4]/10^ceiling(log10(x[4]))
-             }),
-          time = time - min(time)) %>%
-   arrange(time)
-
-
-fft
 
 
 
