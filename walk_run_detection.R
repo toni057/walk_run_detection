@@ -60,8 +60,12 @@ Rr <- function(x) {
 
 # rotate accelerometer data - roll, pitch, yaw
 d1 <- list()
+vars <- starts_with('accel', vars = names(d))
 for (i in 1:nrow(d)) {
-   d1[[i]] <- t(Ry(d$acceleration_x[i])) %*% t(Rp(d$acceleration_x[i])) %*% t(Rr(d$acceleration_x[i])) %*% t(as.matrix(d[i,5:7]))
+   d1[[i]] <-  t(Ry(d$acceleration_x[i])) %*% 
+               t(Rp(d$acceleration_x[i])) %*% 
+               t(Rr(d$acceleration_x[i])) %*% 
+               t(as.matrix(d[i, vars]))
    rownames(d1[[i]]) <- c('x', 'y', 'z')
 }
 
@@ -181,6 +185,9 @@ eval.model(pred_ensemble[trainind], train$activity, pred_ensemble[-trainind], te
 
 
 
+dd <- d[d$block == 5,]
+
+fft(dd$)
 
 
 
