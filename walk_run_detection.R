@@ -18,7 +18,23 @@ source('helper_functions.R')
 d <- read_csv('dataset.csv')
 
 
+# add lap time that starts from 0 at every measurement
+d <- d %>% 
+   mutate(block = c(0, cumsum(abs(diff(activity))))) %>%
+   group_by(block) %>%
+   mutate(t = time %>% 
+             strsplit(':') %>%
+             map_dbl(function(x) {
+                x <- as.numeric(x)
+                x[1:3] %*% c(60*60, 60, 1) + x[4]/10^ceiling(log10(x[4]))
+             }),
+          t = t - min(t)) %>%
+   ungroup(block) %>%
+   arrange(block, t) %>%
+   select(date, time, t, username:gyro_z)
 
+
+# scatterplot
 d %>%
    mutate(n = 1:n()) %>%
    select(n, activity, acceleration_x:acceleration_z) %>%
@@ -160,6 +176,24 @@ eval.model(pred_rf[trainind], train$activity, pred_rf[-trainind], test$activity)
 eval.model(pred_ensemble[trainind], train$activity, pred_ensemble[-trainind], test$activity)
 
 
+
+
+
+
+
+
+dd <- d2[d$block == 5,]
+dd %>%
+   mutate(time = strsplit(time, ':') %>%
+             map_dbl( function(x) {
+                x <- as.numeric(x)
+                x[1:3] %*% c(60*60, 60, 1) + x[4]/10^ceiling(log10(x[4]))
+             }),
+          time = time - min(time)) %>%
+   arrange(time)
+
+
+fft
 
 
 
