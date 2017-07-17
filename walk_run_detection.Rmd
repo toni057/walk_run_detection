@@ -9,42 +9,218 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE, warning=FALSE)
 ```
 
-## R Markdown
-
-This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
-
-When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+# Run or Walk detection
 
 ```{r results='hide', message=FALSE, warning=FALSE}
 
 library(dplyr)
+library(tidyr)
 library(readr)
 library(purrr)
 library(magrittr)
-library(FactoMineR)
-library(factoextra)
+library(ggplot2)
+library(reshape2)
+
+library(caret)
+library(gbm)
+library(ranger)
+library(glmnet)
+
+library(ROCR)
+
+source('helper_functions.R', local=TRUE)
+
 
 # load dataset
 d <- read_csv('dataset.csv')
 
 ```
 
-# Exploration
+## Exploration
 
-Show first several rows of data
+Show first several rows of data:
 
-```{r load data, echo=FALSE}
+```{r load data, echo = TRUE}
 
 head(d)
 
 ```
 
-## ploting data
+## Plot data
 
-You can also embed plots, for example:
+Scatterplot of data shows us distribution of variables over time:
 
-```{r pressure, echo=FALSE}
-plot(pressure)
+```{r plot, echo = TRUE}
+
+d %>%
+   mutate(n = 1:n()) %>%
+   select(n, activity, acceleration_x:acceleration_z) %>%
+   gather(direction, acceleration, -n, -activity) %>%
+   ggplot() +
+   geom_point(aes(x = n, y = acceleration, group = direction, color = direction), size=1, alpha=0.1) +
+   facet_grid(direction ~ activity, scales="free_y")
 ```
 
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+
+## Feature engineering
+
+Add rotated accelerations in the 'Earth' coordinate system.
+```{r roll-pitch-yaw rotation, echo = TRUE}
+
+
+# rotation matrices
+Ry <- function(x) {
+   matrix(c(cos(x), -sin(x), 0, sin(x), cos(x), 0, 0, 0, 1), nrow = 3, byrow = T)
+}
+
+Rp <- function(x) {
+   matrix(c(cos(x), 0, sin(x), 0, 1, 0, -sin(x), 0, cos(x)), nrow = 3, byrow = T)
+}
+
+Rr <- function(x) {
+   matrix(c(1, 0, 0, 0, cos(x), -sin(x), 0, sin(x), cos(x)), nrow = 3, byrow = T)
+}
+
+
+# rotate accelerometer data - roll, pitch, yaw
+d1 <- list()
+for (i in 1:nrow(d)) {
+   d1[[i]] <- t(Ry(d$acceleration_x[i])) %*% t(Rp(d$acceleration_x[i])) %*% t(Rr(d$acceleration_x[i])) %*% t(as.matrix(d[i,5:7]))
+   rownames(d1[[i]]) <- c('x', 'y', 'z')
+}
+
+
+# merge rotated accelerometer data
+d2 <- d1 %>%
+   map(~t(.x)) %>%
+   do.call(rbind, .) %>%
+   cbind.data.frame(d, .) %>%
+   mutate(a = sqrt(x^2 + y^2 + z^2)) %T>%
+   head()
+
+d2 %>%
+   mutate(n = 1:n()) %>%
+   select(n, activity, x:z) %>%
+   gather(direction, acceleration, -n, -activity) %>%
+   ggplot() +
+   geom_point(aes(x = n, y = acceleration, group = direction, color = direction), size=1, alpha=0.1) +
+   facet_grid(direction ~ activity, scales="free_y")
+
+```
+
+
+## Modeling
+
+First we split to training and validation datasets. We will only build models that are dependant on the current measurement.
+
+```{r split to train and test, echo = TRUE}
+
+# split to train and test
+trainind <- createDataPartition(d2$activity, p = .8, list = F, times = 1)
+train <- d2[trainind,]
+test <- d2[-trainind,]
+
+
+# formula
+fmla <- activity ~ acceleration_x + acceleration_y + acceleration_z + gyro_x + gyro_y + gyro_z + x + y + z + a
+
+```
+
+
+### GLMNET
+
+``` {r glmnet, echo = TRUE}
+
+# fit glmnet
+m <- glmnet(model.matrix(fmla, d2), d2$activity, family="binomial", nlambda = 200)
+fit.tr <- predict(m, model.matrix(fmla, train))
+fit.te <- predict(m, model.matrix(fmla, test))
+
+# validation set auc
+auc.glmnet.te <- apply(fit.te, 2, get.AUC, lab=test$activity)
+
+# select the best lambda based on the validation set
+pred_glmnet <- predict(m, model.matrix(fmla, d2), s = m$lambda[which(auc.glmnet.te == max(auc.glmnet.te))], type = 'response')
+eval.model(pred_glmnet[trainind], train$activity, pred_glmnet[-trainind], test$activity)
+
+
+```
+
+
+### Gradient boosting
+
+Here we increase the number of trees while measuring the CV error.
+
+``` {r gbm, echo = TRUE}
+
+# fir gradient boost
+m <- gbm(fmla, distribution = 'bernoulli', data = train, n.trees = 50, shrinkage = 0.1, interaction.depth = 5, n.cores = 4)
+fit.te <- predict(m, test, n.trees = m$n.trees)
+auc.gbm.te.0 <- auc.glmnet.te <- get.AUC(fit.te, lab=test$activity)
+
+for (i in 1:9) {
+   m0 <- m
+   m <- gbm.more(m, 50)
+
+   fit.te <- predict(m, test, n.trees = m$n.trees)
+   
+   auc.gbm.te <- get.AUC(fit.te, lab=test$activity)
+   if (auc.gbm.te > auc.gbm.te.0) {
+      m0 <- m
+   }
+}
+m <- m0
+fit.tr <- predict(m, train, n.trees = m$n.trees)
+fit.te <- predict(m, test, n.trees = m$n.trees)
+eval.model(fit.tr, train$activity, fit.te, test$activity)
+pred_gbm <- predict(m, d2, n.trees = m$n.trees, type = 'response')
+
+```
+
+
+### Random forest
+
+Here we fit the random forest and optimize over the number of trees and tree depth to find the optimal parameters.
+
+``` {r ranger, echo=TRUE}
+
+# fit random forest
+# optimize number of trees and min.node.size
+J <- function(x) {
+   if (any(x<0)) return (1e10)
+   
+   num.trees <- ceiling(x[1])
+   min.node.size <- ceiling(x[2])
+   
+   set.seed(612654)
+   m <- ranger(fmla, train, num.trees = num.trees, num.threads = 4, verbose = F, min.node.size = min.node.size)
+   fit.te <- predict(m, test)$predictions
+   
+   auc <- get.AUC(fit.te, lab=test$activity)
+   cat(sprintf("N trees: %3d, Min node size: %2d, AUC: %0.7f\n", ceiling(x[1]), ceiling(x[2]), auc))
+   -auc
+}
+x <- optim(c(10, 5), J, control = list(parscale=c(10, 1)))
+
+m <- ranger(fmla, train, num.trees = ceiling(x$par[1]), num.threads = 4, verbose = F, min.node.size = ceiling(x$par[2]))
+pred_rf <- predict(m, d2)$predictions
+eval.model(pred_rf[trainind], train$activity, pred_rf[-trainind], test$activity)
+
+
+pred_ensemble <- rowMeans(cbind(pred_glmnet, pred_gbm, pred_rf))
+
+```
+
+
+### Model ensembling
+
+Model ensemble using a simple average.
+
+```{r ensemble, echo=TRUE}
+
+pred_ensemble <- rowMeans(cbind(pred_glmnet, pred_gbm, pred_rf))
+
+eval.model(pred_ensemble[trainind], train$activity, pred_ensemble[-trainind], test$activity)
+
+```
+
