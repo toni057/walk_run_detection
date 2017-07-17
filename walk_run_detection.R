@@ -181,64 +181,10 @@ eval.model(pred_ensemble[trainind], train$activity, pred_ensemble[-trainind], te
 
 
 
-
-
-
-
-dd <- d2[d2$block == 5,]
-
-plot_fft <- function(t, x, Fmax=512){
-   # ft <- fft(x)
-   
-   f <- seq(0, Fmax, 1)
-   W <- matrix(0, nrow = length(f), ncol = length(t))
-   for (i in 1:length(f)) W[i,] = exp(-2*pi*j * f[i]*t)
-   
-   ft <- W %*% x
-   plot(f, abs(ft), type = 'l')
-}
-
-
-
-plot_fft(dd$t, dd$acceleration_x, Fmax = 16)
-plot_fft(dd$t, dd$acceleration_y)
-plot_fft(dd$t, dd$acceleration_z)
-
-plot_fft(dd$t, dd$gyro_x)
-plot_fft(dd$t, dd$gyro_y)
-plot_fft(dd$t, dd$gyro_z)
-
-plot_fft(dd$t, dd$x)
-plot_fft(dd$t, dd$y)
-plot_fft(dd$t, dd$z)
-
-
-
-library(signal)
-
-freqz(signal::butter(5, .1, 'low'))
-
-
-
-
-wss <- list()
-
-for (nc in 2:50) {
-   km <- kmeans(t, nc)
-   wss <- c(wss, list(c('nc' = nc, 'wss' = km$tot.withinss)))
-}
-
-
-km <- map_df(wss, bind_rows)
-plot(km$nc, km$wss, type='l')
-
-
-
-
-
-
-
-
+set.seed(512)
+m_ensebmle <- gbm(d2$activity ~ pred_glmnet + pred_gbm + pred_rf, n.trees = 500, interaction.depth = 5, distribution = 'bernoulli')
+pred_ensemble <- predict(m_ensebmle, newdata = d2, n.trees = m_ensebmle$n.trees, type = 'response')
+eval.model(pred_ensemble[trainind], train$activity, pred_ensemble[-trainind], test$activity)
 
 
 
